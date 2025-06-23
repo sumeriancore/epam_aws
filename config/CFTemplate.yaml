@@ -1,0 +1,229 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Epam AWS CloudFormation Template
+Parameters:
+  StepanOvsyannikovAMI:
+    Type: String
+    Default: ami-0fd987bd6879e4bc5
+  StepanOvsyannikovInstanceType:
+    Type: String
+    Default: t2.micro
+
+Resources:
+  S3bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub stepan-ovsyannikov-s3-bucket-${AWS::AccountId}
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-s3-bucket-CF
+
+  StepanOvsyannikovNetwork:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-Network
+
+  StepanOvsyannikovInternetGateWay:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-InternetGateWay
+
+  StepanOvsyannikovVPCInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId:
+        Ref: StepanOvsyannikovInternetGateWay
+      VpcId:
+        Ref: StepanOvsyannikovNetwork
+
+  StepanOvsyannikovPublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: "us-east-1"
+      VpcId: !Ref StepanOvsyannikovNetwork
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-PublicSubnet-A
+
+  StepanOvsyannikovPublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.12.0/24
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: "us-east-1"
+      VpcId: !Ref StepanOvsyannikovNetwork
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-PublicSubnet-B
+
+  StepanOvsyannikovRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref StepanOvsyannikovNetwork
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-RouteTable
+
+  StepanOvsyannikovRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref StepanOvsyannikovRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref StepanOvsyannikovInternetGateWay
+
+  StepanOvsyannikovSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref StepanOvsyannikovPublicSubnetA
+      RouteTableId: !Ref StepanOvsyannikovRouteTable
+
+  StepanOvsyannikovSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref StepanOvsyannikovPublicSubnetB
+      RouteTableId: !Ref StepanOvsyannikovRouteTable
+
+  StepanOvsyannikovSecGr1:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: stepan-ovsyannikov-sec-gr1
+      GroupDescription: Security group for project with HTTP, HTTPS, SSH, and app access
+      VpcId: !Ref StepanOvsyannikovNetwork
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-SecGr1
+
+  StepanOvsyannikovHttpSecGrIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt StepanOvsyannikovSecGr1.GroupId
+      CidrIp: 0.0.0.0/0
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      Description: Allow HTTP from anywhere
+
+  StepanOvsyannikovHttpSecGrIngress8080:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt StepanOvsyannikovSecGr1.GroupId
+      CidrIp: 0.0.0.0/0
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      Description: Allow 8080 HTTP from anywhere
+
+  StepanOvsyannikovHttpsSecGrIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt StepanOvsyannikovSecGr1.GroupId
+      CidrIp: 0.0.0.0/0
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      Description: Allow HTTPS from anywhere
+
+  StepanOvsyannikovSSHSecGrIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt StepanOvsyannikovSecGr1.GroupId
+      CidrIp: 5.152.7.109/32
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      Description: Allow SSH from specified IP
+
+  StepanOvsyannikovLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: stepan-ovsyannikov-LaunchTemplate
+      LaunchTemplateData:
+        ImageId: !Ref StepanOvsyannikovAMI
+        InstanceType: !Ref StepanOvsyannikovInstanceType
+        KeyName: stepan-ovsyannikov-keypair-1
+        SecurityGroupIds:
+          - !GetAtt StepanOvsyannikovSecGr1.GroupId
+
+  StepanOvsyannikovAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref StepanOvsyannikovLaunchTemplate
+        Version: !GetAtt StepanOvsyannikovLaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier:
+        - !Ref StepanOvsyannikovPublicSubnetA
+        - !Ref StepanOvsyannikovPublicSubnetB
+      MinSize: '1'
+      MaxSize: '3'
+      DesiredCapacity: '1'
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      TargetGroupARNs:
+        - !Ref StepanOvsyannikovTargetGroup
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-AutoScalingGroup
+          PropagateAtLaunch: true
+
+  StepanOvsyannikovScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref StepanOvsyannikovAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 50.0
+
+  StepanOvsyannikovLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: stepan-ovsyannikov-load-balancer
+      Subnets:
+        - !Ref StepanOvsyannikovPublicSubnetA
+        - !Ref StepanOvsyannikovPublicSubnetB
+      SecurityGroups:
+        - !GetAtt StepanOvsyannikovSecGr1.GroupId
+      Scheme: internet-facing
+      Type: application
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-LoadBalancer
+
+  StepanOvsyannikovTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: stepan-ovsyannikov-TargetGroup
+      VpcId: !Ref StepanOvsyannikovNetwork
+      Port: 8080
+      Protocol: HTTP
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /api/metadata
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      TargetType: instance
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-TargetGroup
+
+  StepanOvsyannikovListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref StepanOvsyannikovLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref StepanOvsyannikovTargetGroup
