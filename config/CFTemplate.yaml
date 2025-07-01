@@ -3,19 +3,28 @@ Description: Epam AWS CloudFormation Template
 Parameters:
   StepanOvsyannikovAMI:
     Type: String
-    Default: ami-0fd987bd6879e4bc5
+    Default: ami-0311dd0c1d22747a9
   StepanOvsyannikovInstanceType:
     Type: String
     Default: t2.micro
+  RDSDBName:
+    Type: String
+    Default: stepan-ovsyannikov-db
+  RDSMasterUsername:
+    Type: String
+    Default: postgres
+  RDSMasterPassword:
+    Type: String
+    Default: stepan20131998
 
 Resources:
-  S3bucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub stepan-ovsyannikov-s3-bucket-${AWS::AccountId}
-      Tags:
-        - Key: Name
-          Value: stepan-ovsyannikov-s3-bucket-CF
+#  S3bucket:
+#    Type: AWS::S3::Bucket
+#    Properties:
+#      BucketName: stepan-ovsyannikov-bucket1
+#      Tags:
+#        - Key: Name
+#          Value: stepan-ovsyannikov-s3-bucket-CF
 
   StepanOvsyannikovNetwork:
     Type: AWS::EC2::VPC
@@ -66,6 +75,19 @@ Resources:
         - Key: Name
           Value: stepan-ovsyannikov-PublicSubnet-B
 
+  StepanOvsyannikovPrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.13.0/24
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: "us-east-1"
+      VpcId: !Ref StepanOvsyannikovNetwork
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-PrivateSubnet-A
+
   StepanOvsyannikovRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -92,6 +114,20 @@ Resources:
     Properties:
       SubnetId: !Ref StepanOvsyannikovPublicSubnetB
       RouteTableId: !Ref StepanOvsyannikovRouteTable
+
+  StepanOvsyannikovPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref StepanOvsyannikovNetwork
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-PrivateRouteTable
+
+  StepanOvsyannikovPrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref StepanOvsyannikovPrivateSubnetA
+      RouteTableId: !Ref StepanOvsyannikovPrivateRouteTable
 
   StepanOvsyannikovSecGr1:
     Type: AWS::EC2::SecurityGroup
@@ -142,6 +178,50 @@ Resources:
       FromPort: 22
       ToPort: 22
       Description: Allow SSH from specified IP
+
+  StepanOvsyannikovRDSSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupName: stepan-ovsyannikov-rds-sec-gr
+        GroupDescription: Security group for RDS PostgreSQL access
+        VpcId: !Ref StepanOvsyannikovNetwork
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 5432
+            ToPort: 5432
+            SourceSecurityGroupId: !GetAtt StepanOvsyannikovSecGr1.GroupId
+            Description: Allow PostgreSQL from EC2 instances
+        Tags:
+          - Key: Name
+            Value: stepan-ovsyannikov-RDSSecGr
+
+  StepanOvsyannikovRDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: stepan-ovsyannikov-postgres
+      Engine: postgres
+      EngineVersion: "16"
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: 20
+      StorageType: gp2
+      DBName: !Ref RDSDBName
+      MasterUsername: !Ref RDSMasterUsername
+      MasterUserPassword: !Ref RDSMasterPassword
+      VPCSecurityGroups:
+        - !GetAtt StepanOvsyannikovRDSSecurityGroup.GroupId
+      DBSubnetGroupName: !Ref StepanOvsyannikovDBSubnetGroup
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-RDS
+
+  StepanOvsyannikovDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: stepan-ovsyannikov-dbsubnetgroup
+      DBSubnetGroupDescription: Subnet group for RDS in private subnet
+      SubnetIds:
+        - !Ref StepanOvsyannikovPrivateSubnetA
 
   StepanOvsyannikovLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
