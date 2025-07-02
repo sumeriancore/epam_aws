@@ -1,0 +1,25 @@
+spring:
+  datasource:
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USERNAME}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+
+aws:
+  secretsmanager:
+    secret-id: ${SECRET_ID}
+  s3:
+    bucket-name: stepan-ovsyannikov-bucket1
+    region: us-east-1
+    folder: rds/
+
+local:
+  filePath: downloads
+
+logging:
+  level:
+    org.flywaydb: DEBUG
+    org.springframework.jdbc: DEBUG

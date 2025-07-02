@@ -1,31 +1,29 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: Epam AWS CloudFormation Template
+Description: Epam AWS CloudFormation Template with full Secrets Manager Integration for RDS Credentials.
+
 Parameters:
   StepanOvsyannikovAMI:
     Type: String
-    Default: ami-0311dd0c1d22747a9
+    Default: ami-018679b5611794121
+    Description: AMI ID for the EC2 instances.
   StepanOvsyannikovInstanceType:
     Type: String
     Default: t2.micro
+    Description: EC2 instance type for the application.
   RDSDBName:
     Type: String
-    Default: stepan-ovsyannikov-db
+    Default: postgres
+    Description: Name for the RDS PostgreSQL database.
   RDSMasterUsername:
     Type: String
     Default: postgres
+    Description: Master username for the RDS PostgreSQL database.
   RDSMasterPassword:
     Type: String
-    Default: stepan20131998
+    Description: Master password for the RDS PostgreSQL database. This will be stored securely in Secrets Manager.
+    NoEcho: true # Prevents password from being displayed in CloudFormation console or logs.
 
 Resources:
-#  S3bucket:
-#    Type: AWS::S3::Bucket
-#    Properties:
-#      BucketName: stepan-ovsyannikov-bucket1
-#      Tags:
-#        - Key: Name
-#          Value: stepan-ovsyannikov-s3-bucket-CF
-
   StepanOvsyannikovNetwork:
     Type: AWS::EC2::VPC
     Properties:
@@ -44,19 +42,14 @@ Resources:
   StepanOvsyannikovVPCInternetGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
-      InternetGatewayId:
-        Ref: StepanOvsyannikovInternetGateWay
-      VpcId:
-        Ref: StepanOvsyannikovNetwork
+      InternetGatewayId: !Ref StepanOvsyannikovInternetGateWay
+      VpcId: !Ref StepanOvsyannikovNetwork
 
   StepanOvsyannikovPublicSubnetA:
     Type: AWS::EC2::Subnet
     Properties:
       CidrBlock: 10.0.11.0/24
-      AvailabilityZone:
-        Fn::Select:
-          - 0
-          - Fn::GetAZs: "us-east-1"
+      AvailabilityZone: !Select [0, !GetAZs "us-east-1"]
       VpcId: !Ref StepanOvsyannikovNetwork
       Tags:
         - Key: Name
@@ -66,10 +59,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       CidrBlock: 10.0.12.0/24
-      AvailabilityZone:
-        Fn::Select:
-          - 1
-          - Fn::GetAZs: "us-east-1"
+      AvailabilityZone: !Select [1, !GetAZs "us-east-1"]
       VpcId: !Ref StepanOvsyannikovNetwork
       Tags:
         - Key: Name
@@ -79,14 +69,21 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       CidrBlock: 10.0.13.0/24
-      AvailabilityZone:
-        Fn::Select:
-          - 0
-          - Fn::GetAZs: "us-east-1"
+      AvailabilityZone: !Select [0, !GetAZs "us-east-1"]
       VpcId: !Ref StepanOvsyannikovNetwork
       Tags:
         - Key: Name
           Value: stepan-ovsyannikov-PrivateSubnet-A
+
+  StepanOvsyannikovPrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.14.0/24
+      AvailabilityZone: !Select [1, !GetAZs "us-east-1"]
+      VpcId: !Ref StepanOvsyannikovNetwork
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-PrivateSubnet-B
 
   StepanOvsyannikovRouteTable:
     Type: AWS::EC2::RouteTable
@@ -127,6 +124,12 @@ Resources:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref StepanOvsyannikovPrivateSubnetA
+      RouteTableId: !Ref StepanOvsyannikovPrivateRouteTable
+
+  StepanOvsyannikovPrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref StepanOvsyannikovPrivateSubnetB
       RouteTableId: !Ref StepanOvsyannikovPrivateRouteTable
 
   StepanOvsyannikovSecGr1:
@@ -180,25 +183,25 @@ Resources:
       Description: Allow SSH from specified IP
 
   StepanOvsyannikovRDSSecurityGroup:
-      Type: AWS::EC2::SecurityGroup
-      Properties:
-        GroupName: stepan-ovsyannikov-rds-sec-gr
-        GroupDescription: Security group for RDS PostgreSQL access
-        VpcId: !Ref StepanOvsyannikovNetwork
-        SecurityGroupIngress:
-          - IpProtocol: tcp
-            FromPort: 5432
-            ToPort: 5432
-            SourceSecurityGroupId: !GetAtt StepanOvsyannikovSecGr1.GroupId
-            Description: Allow PostgreSQL from EC2 instances
-        Tags:
-          - Key: Name
-            Value: stepan-ovsyannikov-RDSSecGr
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: stepan-ovsyannikov-rds-sec-gr
+      GroupDescription: Security group for RDS PostgreSQL access
+      VpcId: !Ref StepanOvsyannikovNetwork
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !GetAtt StepanOvsyannikovSecGr1.GroupId
+          Description: Allow PostgreSQL from EC2 instances
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-RDSSecGr
 
   StepanOvsyannikovRDS:
     Type: AWS::RDS::DBInstance
     Properties:
-      DBInstanceIdentifier: stepan-ovsyannikov-postgres
+      DBInstanceIdentifier: StepanOvsyannikovPostgres
       Engine: postgres
       EngineVersion: "16"
       DBInstanceClass: db.t4g.micro
@@ -222,6 +225,56 @@ Resources:
       DBSubnetGroupDescription: Subnet group for RDS in private subnet
       SubnetIds:
         - !Ref StepanOvsyannikovPrivateSubnetA
+        - !Ref StepanOvsyannikovPrivateSubnetB
+
+  StepanOvsyannikovDBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-SpringBootDBPassword" # Unique name for the secret
+      Description: RDS Master Credentials for Spring Boot application.
+      SecretString: !Sub |
+        {
+          "username": "${RDSMasterUsername}",
+          "password": "${RDSMasterPassword}",
+          "host": "${StepanOvsyannikovRDS.Endpoint.Address}",
+          "port": "${StepanOvsyannikovRDS.Endpoint.Port}",
+          "dbname": "${RDSDBName}"
+        }
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-SpringBootDBPassword"
+    DependsOn: StepanOvsyannikovRDS
+
+  StepanOvsyannikovEC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: StepanOvsyannikovSecretManagerReadPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref StepanOvsyannikovDBSecret
+
+  StepanOvsyannikovEC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref StepanOvsyannikovEC2Role
+      Path: "/"
 
   StepanOvsyannikovLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
@@ -233,6 +286,33 @@ Resources:
         KeyName: stepan-ovsyannikov-keypair-1
         SecurityGroupIds:
           - !GetAtt StepanOvsyannikovSecGr1.GroupId
+        IamInstanceProfile:
+          Arn: !GetAtt StepanOvsyannikovEC2InstanceProfile.Arn
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum update -y
+            
+            # Install Java if not present
+            if ! command -v java &> /dev/null; then
+                yum install -y java-17-amazon-corretto
+            fi
+            
+            # Export Secret ID to environment variable.
+            # Your Spring Boot application will use this ID to fetch ALL credentials.
+            echo "export SECRET_ID=${StepanOvsyannikovDBSecret}" > /etc/profile.d/springboot-env.sh
+            
+            # Source the environment file to make variables available for the current shell session
+            source /etc/profile.d/springboot-env.sh
+
+            # Ensure your systemd service 'spring-boot-app.service' is configured to load
+            # environment variables from '/etc/profile.d/springboot-env.sh'.
+            # This is typically done by adding 'EnvironmentFile=/etc/profile.d/springboot-env.sh'
+            # to the [Service] section of your systemd unit file.
+            
+            systemctl daemon-reload
+            systemctl enable spring-boot-app.service
+            systemctl start spring-boot-app.service
 
   StepanOvsyannikovAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
