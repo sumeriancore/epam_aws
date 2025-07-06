@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  DBInstanceIdentifier:
+    Type: String
+    Default: my-cf-db
+    Description: The DB instance identifier.
+  DBUser:
+    Type: String
+    Default: admin
+    Description: The master username for the database instance.
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: The master password for the database instance.
+  DBName:
+    Type: String
+    Default: StepanOvsyannikovTestDb
+    Description: The name of the database to create.
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    Description: The size of the database (GB).
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    Description: The DB instance class.
+  VPCCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the VPC.
+  PrivateSubnetCidr:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: CIDR block for the private subnet (for RDS and Lambda).
+  PrivateSubnetCidrB:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: CIDR block for the private subnet (for RDS and Lambda).
+  LambdaCodeS3Bucket:
+    Type: String
+    Default: stepan-ovsyannikov-bucket1
+    Description: S3 bucket where the Lambda deployment package is stored.
+  LambdaCodeS3Key:
+    Type: String
+    Default: lambda/lambda_sql_executor.zip
+    Description: S3 key for the Lambda deployment package.
+  SqlScriptContent:
+    Type: String
+    Description: The SQL script to execute on the database.
+    Default: |
+      GRANT rds_iam TO iam_database_user;
+      GRANT USAGE ON SCHEMA public TO iam_database_user;
+      GRANT CREATE ON SCHEMA public TO iam_database_user;
+      GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO iam_database_user;
+      GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO iam_database_user;
+
+Resources:
+  # --- VPC and Networking ---
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-VPC
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetCidr
+      AvailabilityZone: "us-east-1a"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PrivateSubnet
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetCidrB
+      AvailabilityZone: "us-east-1b"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PrivateSubnetB
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PrivateRT
+
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  VpcInternalSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows internal VPC traffic
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: -1 # Все протоколы
+          FromPort: -1
+          ToPort: -1
+          CidrIp: !Ref VPCCidr
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-VPCInternalSG
+
+  # --- RDS Database ---
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS
+      SubnetIds:
+        - !Ref PrivateSubnet
+        - !Ref PrivateSubnetB
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-DBSubnetGroup
+
+  MyDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      Engine: postgres
+      EngineVersion: "15.8"
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      DBName: !Ref DBName
+      AllocatedStorage: !Ref DBAllocatedStorage
+      DBInstanceClass: !Ref DBInstanceClass
+      VPCSecurityGroups:
+        - !GetAtt VpcInternalSecurityGroup.GroupId
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-MyDB
+
+  # --- Lambda for SQL Execution ---
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaVPCAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-LambdaRole
+
+  SqlExecutorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-SqlExecutor
+      Handler: lambda_function.handler
+      Runtime: python3.9
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      MemorySize: 256
+      Timeout: 300
+      Role: !GetAtt LambdaExecutionRole.Arn
+      VpcConfig:
+        SecurityGroupIds:
+          - !GetAtt VpcInternalSecurityGroup.GroupId
+        SubnetIds:
+          - !Ref PrivateSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-SqlExecutorLambda
+
+  ExecuteSqlCustomResource:
+    Type: Custom::SqlExecutor
+    DependsOn: MyDB
+    Properties:
+      ServiceToken: !GetAtt SqlExecutorLambda.Arn
+      DBHost: !GetAtt MyDB.Endpoint.Address
+      DBPort: !GetAtt MyDB.Endpoint.Port
+      DBName: !Ref DBName
+      DBUser: !Ref DBUser
+      DBPassword: !Ref DBPassword
+      SqlScript: !Ref SqlScriptContent

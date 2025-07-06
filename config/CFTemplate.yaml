@@ -227,55 +227,6 @@ Resources:
         - !Ref StepanOvsyannikovPrivateSubnetA
         - !Ref StepanOvsyannikovPrivateSubnetB
 
-  StepanOvsyannikovDBSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub "${AWS::StackName}-SpringBootDBPassword" # Unique name for the secret
-      Description: RDS Master Credentials for Spring Boot application.
-      SecretString: !Sub |
-        {
-          "username": "${RDSMasterUsername}",
-          "password": "${RDSMasterPassword}",
-          "host": "${StepanOvsyannikovRDS.Endpoint.Address}",
-          "port": "${StepanOvsyannikovRDS.Endpoint.Port}",
-          "dbname": "${RDSDBName}"
-        }
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-SpringBootDBPassword"
-    DependsOn: StepanOvsyannikovRDS
-
-  StepanOvsyannikovEC2Role:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - ec2.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      Path: "/"
-      Policies:
-        - PolicyName: StepanOvsyannikovSecretManagerReadPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                  - secretsmanager:DescribeSecret
-                Resource: !Ref StepanOvsyannikovDBSecret
-
-  StepanOvsyannikovEC2InstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles:
-        - !Ref StepanOvsyannikovEC2Role
-      Path: "/"
-
   StepanOvsyannikovLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -286,33 +237,6 @@ Resources:
         KeyName: stepan-ovsyannikov-keypair-1
         SecurityGroupIds:
           - !GetAtt StepanOvsyannikovSecGr1.GroupId
-        IamInstanceProfile:
-          Arn: !GetAtt StepanOvsyannikovEC2InstanceProfile.Arn
-        UserData:
-          Fn::Base64: !Sub |
-            #!/bin/bash
-            yum update -y
-            
-            # Install Java if not present
-            if ! command -v java &> /dev/null; then
-                yum install -y java-17-amazon-corretto
-            fi
-            
-            # Export Secret ID to environment variable.
-            # Your Spring Boot application will use this ID to fetch ALL credentials.
-            echo "export SECRET_ID=${StepanOvsyannikovDBSecret}" > /etc/profile.d/springboot-env.sh
-            
-            # Source the environment file to make variables available for the current shell session
-            source /etc/profile.d/springboot-env.sh
-
-            # Ensure your systemd service 'spring-boot-app.service' is configured to load
-            # environment variables from '/etc/profile.d/springboot-env.sh'.
-            # This is typically done by adding 'EnvironmentFile=/etc/profile.d/springboot-env.sh'
-            # to the [Service] section of your systemd unit file.
-            
-            systemctl daemon-reload
-            systemctl enable spring-boot-app.service
-            systemctl start spring-boot-app.service
 
   StepanOvsyannikovAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup

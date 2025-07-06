@@ -1,10 +1,10 @@
 package ge.epam.aws.controller;
 
-import com.amazonaws.util.EC2MetadataUtils;
 import ge.epam.aws.model.Ec2Metadata;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import software.amazon.awssdk.regions.internal.util.EC2MetadataUtils;
 
 @RestController
 @RequestMapping("/api")
