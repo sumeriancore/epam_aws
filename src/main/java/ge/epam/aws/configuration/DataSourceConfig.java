@@ -17,9 +17,6 @@ public class DataSourceConfig {
         dataSource.setJdbcUrl(properties.getUrl());
         dataSource.setUsername(properties.getUsername());
 
-//        dataSource.setConnectionTimeout(30000);
-//        dataSource.setMaximumPoolSize(10);
-
         return dataSource;
     }
 }

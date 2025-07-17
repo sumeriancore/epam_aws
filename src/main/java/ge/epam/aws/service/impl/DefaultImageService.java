@@ -3,6 +3,7 @@ package ge.epam.aws.service.impl;
 import ge.epam.aws.model.entity.ImageInfo;
 import ge.epam.aws.repository.ImageRepository;
 import ge.epam.aws.service.ImageService;
+import ge.epam.aws.service.MessagingService;
 import ge.epam.aws.service.S3Service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import software.amazon.awssdk.regions.internal.util.EC2MetadataUtils;
 
 import java.time.ZonedDateTime;
 import java.util.Collections;
@@ -23,6 +25,7 @@ public class DefaultImageService implements ImageService {
 
     private final ImageRepository imageRepository;
     private final S3Service s3Service;
+    private final MessagingService awsMessagingService;
 
     @Value("${aws.s3.folder}")
     private String folder;
@@ -49,7 +52,10 @@ public class DefaultImageService implements ImageService {
         imageRepository.save(imageInfo);
 
         s3Service.uploadFile(file, objectKey);
-
+        awsMessagingService.sendMessageToSqs(
+                "Saved image: { fileName: " + objectKey + ", extension: " + fileExtension + ", size: " + file.getSize() + "}" +
+                        " Тут каким-то макаром при развертывании всего этого дела нам нужно получить DNS имя Load Balancer, пока это не главное"
+        );
         return objectKey;
     }
 

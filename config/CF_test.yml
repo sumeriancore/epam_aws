@@ -1,0 +1,540 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create an RDS PostgreSQL instance with IAM authentication,
+  a Lambda function for post-creation setup, and a dedicated VPC.
+
+Parameters:
+  StepanOvsyannikovAMI:
+    Type: String
+    Default: ami-03c48c14ef28d4eb7
+    Description: AMI ID for the EC2 instances.
+  DBInstanceIdentifier:
+    Type: String
+    Default: my-iam-auth-db
+  DBName:
+    Type: String
+    Default: StepanOvsyannikovTestDb
+  DBMasterUsername:
+    Type: String
+    Default: postgres
+  DBMasterUserPassword:
+    Type: String
+    NoEcho: true
+  LambdaCodeS3BucketName:
+    Type: String
+    Default: stepan-ovsyannikov-bucket1
+    Description: Имя S3 бакета, где хранится Zip-файл с кодом Lambda.
+  LambdaCodeS3Key:
+    Type: String
+    Default: index.zip
+    Description: Ключ (путь к файлу) Zip-файла с кодом Lambda в S3 бакете.
+
+Resources:
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyRDSLambdaVPC
+
+  MyPublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: "us-east-1a"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: MyPublicSubnetA
+
+  MyPublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: "us-east-1b"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: MyPublicSubnetB
+
+  MyPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: "us-east-1b"
+      Tags:
+        - Key: Name
+          Value: MyPrivateSubnet1
+
+  MyPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: "us-east-1a"
+      Tags:
+        - Key: Name
+          Value: MyPrivateSubnet2
+
+  MyDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS instance
+      SubnetIds:
+        - !Ref MyPrivateSubnet1
+        - !Ref MyPrivateSubnet2
+
+  MyRDSParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Parameter group for PostgreSQL with IAM authentication enabled
+      Family: postgres15
+      Parameters:
+        log_connections: "1"
+        log_disconnections: "1"
+
+  MyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: MyVPCInternetGateway
+
+  MyGatewayAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  MyPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: MyPublicRouteTable
+
+  MyPublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref MyPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MyInternetGateway
+    DependsOn: MyGatewayAttach
+
+  MyPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MyPublicSubnetA
+      RouteTableId: !Ref MyPublicRouteTable
+
+  MyPublicSubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MyPublicSubnetB
+      RouteTableId: !Ref MyPublicRouteTable
+
+  MyDBSecurityGroupIngressFromAnywhere:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt MyDBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      CidrIp: 0.0.0.0/0
+    DependsOn: MyDBSecurityGroup
+
+  MyRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AvailabilityZone: "us-east-1b"
+      EnableIAMDatabaseAuthentication: true
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      Engine: postgres
+      EngineVersion: "15.7"
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: 20
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Ref DBMasterUserPassword
+      DBName: !Ref DBName
+      VPCSecurityGroups:
+        - !GetAtt MyDBSecurityGroup.GroupId
+      DBSubnetGroupName: !Ref MyDBSubnetGroup
+      DBParameterGroupName: !Ref MyRDSParameterGroup
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-RDS
+
+  MyDBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS instance
+      VpcId: !Ref MyVPC
+
+  MyLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda to connect to RDS and respond to CloudFormation
+      VpcId: !Ref MyVPC
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          DestinationSecurityGroupId: !GetAtt MyDBSecurityGroup.GroupId
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  MyDBSecurityGroupIngressFromLambda:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt MyDBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt MyLambdaSecurityGroup.GroupId
+    DependsOn:
+      - MyDBSecurityGroup
+      - MyLambdaSecurityGroup
+
+  MyLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RDSConnectPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: rds-db:connect
+                Resource: !Sub "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DBInstanceIdentifier}/${DBMasterUsername}"
+        - PolicyName: LambdaVPCAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+        - PolicyName: CloudFormationS3ResponsePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: "*"
+
+  LambdaCodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-lambda-code-${AWS::AccountId}"
+      Tags:
+        - Key: Name
+          Value: LambdaCodeBucket
+
+  MyRDSInitializerLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaCodeBucket
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt MyLambdaExecutionRole.Arn
+      Runtime: nodejs22.x
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          DB_MASTER_USERNAME: !Ref DBMasterUsername
+          DB_MASTER_PASSWORD: !Ref DBMasterUserPassword
+      VpcConfig:
+        SecurityGroupIds:
+          - !GetAtt MyLambdaSecurityGroup.GroupId
+        SubnetIds:
+          - !Ref MyPrivateSubnet1
+          - !Ref MyPrivateSubnet2
+      Code:
+        S3Bucket: !Ref LambdaCodeS3BucketName
+        S3Key: !Ref LambdaCodeS3Key
+
+  MyS3VpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MyVPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds:
+        - !Ref MyPrivateRouteTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: "s3:*"
+            Resource: "*"
+      VpcEndpointType: Gateway
+
+  MyPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: MyPrivateRouteTable
+
+  MyPrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MyPrivateSubnet1
+      RouteTableId: !Ref MyPrivateRouteTable
+
+  MyPrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MyPrivateSubnet2
+      RouteTableId: !Ref MyPrivateRouteTable
+
+  RDSIAMUserCreator:
+    Type: Custom::RDSPostCreationScript
+    Properties:
+      ServiceToken: !GetAtt MyRDSInitializerLambda.Arn
+      DBEndpoint: !GetAtt MyRDSInstance.Endpoint.Address
+      DBName: !Ref DBName
+      DBUser: !Ref DBMasterUsername
+      DBPassword: !Ref DBMasterUserPassword
+    DependsOn: MyRDSInstance
+
+
+  #############################################################
+
+  MyALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ALB allowing HTTP access
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: MyALBSecurityGroup
+
+    # Security Group для EC2 (Spring Boot)
+  MyEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EC2 instances running Spring Boot app
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        # Разрешаем входящий трафик с ALB на порт приложения
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !GetAtt MyALBSecurityGroup.GroupId
+      SecurityGroupEgress:
+        # Разрешаем исходящий трафик на RDS
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          DestinationSecurityGroupId: !GetAtt MyDBSecurityGroup.GroupId
+        # Разрешаем исходящий трафик для CloudWatch Logs и IAM RDS Auth
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: MyEC2SecurityGroup
+
+    # Добавляем разрешение для EC2 в Security Group RDS
+  MyDBSecurityGroupIngressFromEC2:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt MyDBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt MyEC2SecurityGroup.GroupId
+    DependsOn:
+      - MyDBSecurityGroup
+      - MyEC2SecurityGroup
+
+    # IAM Роль для EC2 инстансов
+  MyEC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref MyEC2Role
+
+  MyEC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Необходимы для CloudWatch Logs
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: RDSConnectPolicyForEC2
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: rds-db:connect
+                Resource: !Sub "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DBInstanceIdentifier}/*" # Разрешаем подключение к любому пользователю на этом RDS
+        - PolicyName: EC2DescribeNetworkInterfaces
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeNetworkInterfaces
+                Resource: "*"
+
+
+  MyLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${AWS::StackName}-SpringBootApp"
+      LaunchTemplateData:
+        ImageId: !Ref StepanOvsyannikovAMI
+        InstanceType: t3.micro # Или другой подходящий тип инстанса
+        SecurityGroupIds:
+          - !GetAtt MyEC2SecurityGroup.GroupId
+        IamInstanceProfile:
+          Arn: !GetAtt MyEC2InstanceProfile.Arn
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            # Установка CloudWatch Agent
+            sudo yum update -y
+            sudo yum install -y amazon-cloudwatch-agent
+
+            # Настройка CloudWatch Agent (пример)
+            # Вы можете загрузить более сложную конфигурацию с S3 или создать её здесь
+            cat << 'EOF' > /opt/aws/amazon-cloudwatch-agent/bin/config.json
+            {
+                "logs": {
+                    "logs_collected": {
+                        "files": {
+                            "collect_list": [
+                                {
+                                    "file_path": "/var/log/messages",
+                                    "log_group_name": "/ec2/SpringBootApp/messages",
+                                    "log_stream_name": "{instance_id}"
+                                },
+                                {
+                                    "file_path": "/var/log/cloud-init-output.log",
+                                    "log_group_name": "/ec2/SpringBootApp/cloud-init-output",
+                                    "log_stream_name": "{instance_id}"
+                                },
+                                {
+                                    "file_path": "/path/to/your/springboot/app.log", # Замените на путь к логам вашего приложения
+                                    "log_group_name": "/ec2/SpringBootApp/application-logs",
+                                    "log_stream_name": "{instance_id}"
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+            EOF
+            sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/bin/config.json -s
+
+            # Передача параметров RDS в Spring Boot приложение
+            # Рекомендуется использовать Environment Variables или Spring Cloud Config Server
+            # Для простоты, здесь пример установки переменных окружения.
+            # В реальном приложении лучше использовать Spring Profile или другие механизмы.
+            echo "export SPRING_DATASOURCE_URL=jdbc:postgresql://${MyRDSInstance.Endpoint.Address}:${MyRDSInstance.Endpoint.Port}/${DBName}?sslmode=require&prepareThreshold=0" >> /etc/profile
+            echo "export SPRING_DATASOURCE_USERNAME=${DBMasterUsername}" >> /etc/profile # Это будет использоваться для генерации IAM аутентификационного токена
+            echo "export RDS_HOSTNAME=${MyRDSInstance.Endpoint.Address}" >> /etc/profile
+            echo "export RDS_PORT=${MyRDSInstance.Endpoint.Port}" >> /etc/profile
+            echo "export RDS_DB_NAME=${DBName}" >> /etc/profile
+
+            # Запустите ваше Spring Boot приложение здесь
+            # Например, если ваше приложение находится в /opt/app/my-app.jar
+            # sudo java -jar /opt/app/my-app.jar &
+
+            # Обязательно убедитесь, что ваше приложение запускается при старте инстанса,
+            # например, через systemd сервис.  
+
+  MyAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref MyPublicSubnetA
+        - !Ref MyPublicSubnetB
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MyLaunchTemplate
+        Version: !GetAtt MyLaunchTemplate.LatestVersionNumber
+      MinSize: '1'
+      MaxSize: '3'
+      DesiredCapacity: '1'
+      TargetGroupARNs:
+        - !Ref MyTargetGroup
+      Tags:
+        - Key: Name
+          Value: SpringBootApp-ASG
+          PropagateAtLaunch: true
+
+  MyALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets:
+        - !Ref MyPublicSubnetA
+        - !Ref MyPublicSubnetB
+      SecurityGroups:
+        - !GetAtt MyALBSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: SpringBootApp-ALB
+
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: /api/metadata
+      HealthCheckPort: 8080
+      HealthCheckProtocol: HTTP
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref MyVPC
+      Targets: [ ]
+      Tags:
+        - Key: Name
+          Value: SpringBootApp-TargetGroup
+
+  MyALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref MyALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref MyTargetGroup

@@ -4,15 +4,18 @@ Description: Epam AWS CloudFormation Template with full Secrets Manager Integrat
 Parameters:
   StepanOvsyannikovAMI:
     Type: String
-    Default: ami-018679b5611794121
+    Default: ami-03c48c14ef28d4eb7
     Description: AMI ID for the EC2 instances.
   StepanOvsyannikovInstanceType:
     Type: String
     Default: t2.micro
     Description: EC2 instance type for the application.
+  DBInstanceIdentifier:
+    Type: String
+    Default: stepan-ovsyannikov-db
   RDSDBName:
     Type: String
-    Default: postgres
+    Default: StepanOvsyannikovDb
     Description: Name for the RDS PostgreSQL database.
   RDSMasterUsername:
     Type: String
@@ -20,10 +23,19 @@ Parameters:
     Description: Master username for the RDS PostgreSQL database.
   RDSMasterPassword:
     Type: String
-    Description: Master password for the RDS PostgreSQL database. This will be stored securely in Secrets Manager.
-    NoEcho: true # Prevents password from being displayed in CloudFormation console or logs.
+    Description: Master password for the RDS PostgreSQL database.
+    NoEcho: true
+  LambdaCodeS3BucketName:
+    Type: String
+    Default: stepan-ovsyannikov-bucket1
+    Description: Имя S3 бакета, где хранится Zip-файл с кодом Lambda.
+  LambdaCodeS3Key:
+    Type: String
+    Default: index.zip
+    Description: Ключ (путь к файлу) Zip-файла с кодом Lambda в S3 бакете.
 
 Resources:
+  # Network
   StepanOvsyannikovNetwork:
     Type: AWS::EC2::VPC
     Properties:
@@ -49,7 +61,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       CidrBlock: 10.0.11.0/24
-      AvailabilityZone: !Select [0, !GetAZs "us-east-1"]
+      AvailabilityZone: "us-east-1a"
       VpcId: !Ref StepanOvsyannikovNetwork
       Tags:
         - Key: Name
@@ -59,7 +71,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       CidrBlock: 10.0.12.0/24
-      AvailabilityZone: !Select [1, !GetAZs "us-east-1"]
+      AvailabilityZone: "us-east-1b"
       VpcId: !Ref StepanOvsyannikovNetwork
       Tags:
         - Key: Name
@@ -69,7 +81,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       CidrBlock: 10.0.13.0/24
-      AvailabilityZone: !Select [0, !GetAZs "us-east-1"]
+      AvailabilityZone: "us-east-1a"
       VpcId: !Ref StepanOvsyannikovNetwork
       Tags:
         - Key: Name
@@ -79,7 +91,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       CidrBlock: 10.0.14.0/24
-      AvailabilityZone: !Select [1, !GetAZs "us-east-1"]
+      AvailabilityZone: "us-east-1b"
       VpcId: !Ref StepanOvsyannikovNetwork
       Tags:
         - Key: Name
@@ -198,25 +210,36 @@ Resources:
         - Key: Name
           Value: stepan-ovsyannikov-RDSSecGr
 
-  StepanOvsyannikovRDS:
+  MyRDSInstance:
     Type: AWS::RDS::DBInstance
     Properties:
-      DBInstanceIdentifier: StepanOvsyannikovPostgres
+      AvailabilityZone: "us-east-1a"
+      EnableIAMDatabaseAuthentication: true
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
       Engine: postgres
-      EngineVersion: "16"
+      EngineVersion: "15.7"
       DBInstanceClass: db.t4g.micro
       AllocatedStorage: 20
-      StorageType: gp2
-      DBName: !Ref RDSDBName
       MasterUsername: !Ref RDSMasterUsername
       MasterUserPassword: !Ref RDSMasterPassword
+      DBName: !Ref RDSDBName
       VPCSecurityGroups:
         - !GetAtt StepanOvsyannikovRDSSecurityGroup.GroupId
       DBSubnetGroupName: !Ref StepanOvsyannikovDBSubnetGroup
+      DBParameterGroupName: !Ref StepanOvsyannikovRDSParameterGroup
       PubliclyAccessible: false
       Tags:
         - Key: Name
           Value: stepan-ovsyannikov-RDS
+
+  StepanOvsyannikovRDSParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Parameter group for PostgreSQL with IAM authentication enabled
+      Family: postgres15
+      Parameters:
+        log_connections: "1"
+        log_disconnections: "1"
 
   StepanOvsyannikovDBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -226,6 +249,33 @@ Resources:
       SubnetIds:
         - !Ref StepanOvsyannikovPrivateSubnetA
         - !Ref StepanOvsyannikovPrivateSubnetB
+
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RDSConnectPolicyForEC2
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds-db:connect
+                Resource: !Sub "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DBInstanceIdentifier}/iam_database_user"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${AWS::StackName}-EC2InstanceProfile"
+      Roles:
+        - !Ref EC2InstanceRole
 
   StepanOvsyannikovLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
@@ -237,6 +287,42 @@ Resources:
         KeyName: stepan-ovsyannikov-keypair-1
         SecurityGroupIds:
           - !GetAtt StepanOvsyannikovSecGr1.GroupId
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+  
+            # CloudFormation разрешит !GetAtt и !Ref ЗДЕСЬ
+            echo "export SPRING_DATASOURCE_URL=jdbc:postgresql://${MyRDSInstance.Endpoint.Address}:${MyRDSInstance.Endpoint.Port}/${RDSDBName}" >> /etc/profile.d/app-env.sh
+            echo "export SPRING_DATASOURCE_USERNAME=${RDSMasterUsername}" >> /etc/profile.d/app-env.sh
+            echo "export DB_NAME=${RDSDBName}" >> /etc/profile.d/app-env.sh
+            echo "export AWS_REGION=${AWS::Region}" >> /etc/profile.d/app-env.sh
+  
+            cat <<EOF | sudo tee /opt/your-spring-app/start_app_with_db_check.sh
+            #!/bin/bash
+            . /etc/profile.d/app-env.sh
+  
+            echo "Waiting for RDS database to be available at ${MyRDSInstance.Endpoint.Address}:${MyRDSInstance.Endpoint.Port}..."
+            timeout=60 # 5 минут
+            counter=0
+            while ! nc -z -v -w 5 "${MyRDSInstance.Endpoint.Address}" "${MyRDSInstance.Endpoint.Port}"; do 
+              echo "RDS not yet available. Waiting..."
+              sleep 5
+              counter=\$((counter+5))
+              if [ \$counter -ge \$timeout ]; then
+                echo "Timeout waiting for RDS. Exiting."
+                exit 1
+              fi
+            done
+            echo "RDS is available. Starting Spring Boot application..."
+  
+            exec java -jar /opt/your-spring-app/your-spring-app-0.0.1-SNAPSHOT.jar
+            EOF
+  
+            sudo chmod +x /opt/your-spring-app/start_app_with_db_check.sh
+  
+            sudo systemctl start your-spring-app.service    
 
   StepanOvsyannikovAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -258,6 +344,9 @@ Resources:
         - Key: Name
           Value: stepan-ovsyannikov-AutoScalingGroup
           PropagateAtLaunch: true
+    DependsOn:
+      - MyRDSInstance
+      - MyRDSInitializerLambda
 
   StepanOvsyannikovScalingPolicy:
     Type: AWS::AutoScaling::ScalingPolicy
@@ -311,3 +400,116 @@ Resources:
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref StepanOvsyannikovTargetGroup
+
+  MyLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda to connect to RDS and respond to CloudFormation
+      VpcId: !Ref StepanOvsyannikovNetwork
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          DestinationSecurityGroupId: !GetAtt StepanOvsyannikovRDSSecurityGroup.GroupId
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  MyDBSecurityGroupIngressFromLambda:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt StepanOvsyannikovRDSSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt MyLambdaSecurityGroup.GroupId
+    DependsOn:
+      - StepanOvsyannikovRDSSecurityGroup
+      - MyLambdaSecurityGroup
+
+  MyLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RDSConnectPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: rds-db:connect
+                Resource: "*"
+        - PolicyName: LambdaVPCAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+        - PolicyName: CloudFormationS3ResponsePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: "*"
+
+  LambdaCodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-lambda-code-${AWS::AccountId}"
+      Tags:
+        - Key: Name
+          Value: LambdaCodeBucket
+
+  MyRDSInitializerLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaCodeBucket
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt MyLambdaExecutionRole.Arn
+      Runtime: nodejs22.x
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          DB_MASTER_USERNAME: !Ref RDSMasterUsername
+          DB_MASTER_PASSWORD: !Ref RDSMasterPassword
+      VpcConfig:
+        SecurityGroupIds:
+          - !GetAtt MyLambdaSecurityGroup.GroupId
+        SubnetIds:
+          - !Ref StepanOvsyannikovPrivateSubnetA
+      Code:
+        S3Bucket: !Ref LambdaCodeS3BucketName
+        S3Key: !Ref LambdaCodeS3Key
+
+  MyS3VpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref StepanOvsyannikovNetwork
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds:
+        - !Ref StepanOvsyannikovPrivateRouteTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: "s3:*"
+            Resource: "*"
+      VpcEndpointType: Gateway

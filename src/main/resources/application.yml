@@ -1,8 +1,7 @@
 spring:
   datasource:
-    url: jdbc:postgresql://stepan-ovsyannikov-db.c6zsa0ei03bh.us-east-1.rds.amazonaws.com:5432/postgres?ssl=true&sslmode=require
+    url: ${SPRING_DATASOURCE_URL}?ssl=true&sslmode=require
     username: iam_database_user
-    password:
     driver-class-name: org.postgresql.Driver
     hikari:
       max-lifetime: 840000
@@ -15,6 +14,13 @@ spring:
     clean-disabled: false
 
 aws:
+  region: us-east-1
+  sns:
+    topic:
+      arn: arn:aws:sns:us-east-1:151182332702:Stepan-Ovsyannikov-UploadsNotificationTopic
+  sqs:
+    queue:
+      url: https://sqs.us-east-1.amazonaws.com/151182332702/Stepan-Ovsyannikov-UploadsNotificationQueue
   s3:
     bucket-name: stepan-ovsyannikov-bucket1
     region: us-east-1
@@ -27,3 +33,5 @@ logging:
   level:
     org.flywaydb: DEBUG
     org.springframework.jdbc: DEBUG
+    software.amazon.awssdk: DEBUG
+    org.postgresql: DEBUG

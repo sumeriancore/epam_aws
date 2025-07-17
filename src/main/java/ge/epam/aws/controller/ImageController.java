@@ -3,6 +3,7 @@ package ge.epam.aws.controller;
 import ge.epam.aws.model.dto.ImageInfoDto;
 import ge.epam.aws.model.entity.ImageInfo;
 import ge.epam.aws.service.ImageService;
+import ge.epam.aws.service.MessagingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;

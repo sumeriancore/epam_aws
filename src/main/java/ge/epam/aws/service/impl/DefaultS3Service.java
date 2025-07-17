@@ -44,7 +44,7 @@ public class DefaultS3Service implements S3Service {
 
     public void uploadFile(MultipartFile file, String objectKey) {
         try {
-            if (!file.isEmpty()) {
+            if (file.isEmpty()) {
                 log.info("Can't upload empty file: {}", file.getOriginalFilename());
             }
             PutObjectRequest putObjectRequest = PutObjectRequest.builder()
