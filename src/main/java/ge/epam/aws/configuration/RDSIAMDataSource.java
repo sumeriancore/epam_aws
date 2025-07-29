@@ -9,6 +9,7 @@ import software.amazon.awssdk.services.rds.model.GenerateAuthenticationTokenRequ
 import java.net.URI;
 
 public class RDSIAMDataSource extends HikariDataSource {
+
     @Override
     public String getPassword() {
         RdsClient rdsClient = RdsClient.builder()

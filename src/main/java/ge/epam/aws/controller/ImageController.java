@@ -3,7 +3,6 @@ package ge.epam.aws.controller;
 import ge.epam.aws.model.dto.ImageInfoDto;
 import ge.epam.aws.model.entity.ImageInfo;
 import ge.epam.aws.service.ImageService;
-import ge.epam.aws.service.MessagingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -70,5 +69,10 @@ public class ImageController {
     public ResponseEntity<String> downloadImage(@RequestParam("fileName") String fileName) {
         ImageInfo imageInfo = imageService.getImage(fileName);
         return new ResponseEntity<>(imageInfo.getFileName(), HttpStatus.OK);
+    }
+
+    @GetMapping("/validate-storage-consistency")
+    public String triggerImageValidation() {
+        return imageService.validateStoragesConsistency();
     }
 }

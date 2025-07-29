@@ -2,7 +2,6 @@ package ge.epam.aws.service.impl.processor;
 
 import ge.epam.aws.service.MessagingService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.services.sqs.model.Message;
 
@@ -18,7 +17,7 @@ public class SqsMessageProcessor {
         this.awsMessagingService = awsMessagingService;
     }
 
-    @Scheduled(fixedRate = 60000)
+//    @Scheduled(fixedRate = 60000)
     public void processSqsMessagesAndPublishToSns() {
         log.info("Scheduled task: Checking SQS for messages...");
         List<Message> messages = awsMessagingService.receiveMessagesFromSqs(10);

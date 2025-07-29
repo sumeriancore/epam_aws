@@ -1,10 +1,12 @@
 spring:
   datasource:
-    url: ${SPRING_DATASOURCE_URL}?ssl=true&sslmode=require
-    username: iam_database_user
+    url: jdbc:postgresql://my-iam-auth-db.c6zsa0ei03bh.us-east-1.rds.amazonaws.com:5432/StepanOvsyannikovTestDb?ssl=true&sslmode=require
+#    username: iam_database_user
     driver-class-name: org.postgresql.Driver
     hikari:
       max-lifetime: 840000
+    username: postgres
+    password: stepan20131998
 
   flyway:
     enabled: true
@@ -33,5 +35,5 @@ logging:
   level:
     org.flywaydb: DEBUG
     org.springframework.jdbc: DEBUG
-    software.amazon.awssdk: DEBUG
+#    software.amazon.awssdk: DEBUG
     org.postgresql: DEBUG

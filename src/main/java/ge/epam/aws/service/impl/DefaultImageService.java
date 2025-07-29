@@ -8,8 +8,13 @@ import ge.epam.aws.service.S3Service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.regions.internal.util.EC2MetadataUtils;
 
@@ -26,6 +31,9 @@ public class DefaultImageService implements ImageService {
     private final ImageRepository imageRepository;
     private final S3Service s3Service;
     private final MessagingService awsMessagingService;
+    private final RestTemplate restTemplate;
+    //move to properties, install in CF
+    private static final String API_GATEWAY_URL = "https://nebbotd0ye.execute-api.us-east-1.amazonaws.com/validate-images";
 
     @Value("${aws.s3.folder}")
     private String folder;
@@ -53,8 +61,7 @@ public class DefaultImageService implements ImageService {
 
         s3Service.uploadFile(file, objectKey);
         awsMessagingService.sendMessageToSqs(
-                "Saved image: { fileName: " + objectKey + ", extension: " + fileExtension + ", size: " + file.getSize() + "}" +
-                        " Тут каким-то макаром при развертывании всего этого дела нам нужно получить DNS имя Load Balancer, пока это не главное"
+                "Saved image: { fileName: " + objectKey + ", extension: " + fileExtension + ", size: " + file.getSize() + "}"
         );
         return objectKey;
     }
@@ -88,5 +95,25 @@ public class DefaultImageService implements ImageService {
             s3Service.downloadFile(imageInfo.getFileName());
         }
         return imageInfo;
+    }
+
+    @Override
+    public String validateStoragesConsistency() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Caller-Source", "SpringBootApp");
+        HttpEntity<String> entity = new HttpEntity<>(headers);
+
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    API_GATEWAY_URL,
+                    HttpMethod.GET,
+                    entity,
+                    String.class
+            );
+            return response.getBody();
+        } catch (Exception e) {
+            log.error("Error calling Lambda: {}", e.getMessage());
+            return "Error calling Lambda: " + e.getMessage();
+        }
     }
 }

@@ -57,12 +57,12 @@ public class DefaultS3Service implements S3Service {
             s3Client.putObject(putObjectRequest, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
 
             String fileUrl = String.format("https://%s.s3.%s.amazonaws.com/%s", bucketName, region, objectKey);
-            log.info("Файл {} успешно загружен в S3. URL: {}", objectKey, fileUrl);
+            log.info("File {} successfully uploaded to S3. URL: {}", objectKey, fileUrl);
         } catch (S3Exception e) {
-            System.err.println("Ошибка S3 при загрузке файла: " + e.awsErrorDetails().errorMessage());
+            log.error("S3 error when uploading file: {}", e.awsErrorDetails().errorMessage());
             throw new RuntimeException(e.getMessage(), e.getCause());
         } catch (IOException e) {
-            System.err.println("Ошибка чтения файла: " + e.getMessage());
+            log.error("Error reading file: {}", e.getMessage());
             throw new RuntimeException(e.getMessage(), e.getCause());
         }
     }
@@ -84,7 +84,7 @@ public class DefaultS3Service implements S3Service {
         try {
             if (parentDirectory != null && !Files.exists(parentDirectory)) {
                 Files.createDirectories(parentDirectory);
-                log.info("Создана директория: {}", parentDirectory.toAbsolutePath());
+                log.info("Directory created: {}", parentDirectory.toAbsolutePath());
             }
 
             GetObjectRequest getObjectRequest = GetObjectRequest.builder()
@@ -101,17 +101,17 @@ public class DefaultS3Service implements S3Service {
                     outputStream.write(buffer, 0, bytesRead);
                 }
 
-                log.info("Файл {} успешно скачан в {}", objectKey, localFilePath);
+                log.info("File {} successfully downloaded to {}", objectKey, localFilePath);
 
             } catch (IOException e) {
-                log.error("Ошибка при записи файла: {}", e.getMessage());
+                log.error("Error writing file: {}", e.getMessage());
                 log.error(e.getMessage(), e);
             }
 
         } catch (IOException e) {
-            log.error("Ошибка при создании директории: {}", e.getMessage());
+            log.error("Directory creating error: {}", e.getMessage());
         } catch (Exception e) {
-            log.error("Ошибка при скачивании файла из S3: {}", e.getMessage());
+            log.error("Download error S3: {}", e.getMessage());
         }
         return true;
     }

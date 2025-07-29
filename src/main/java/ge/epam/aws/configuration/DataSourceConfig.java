@@ -9,8 +9,9 @@ import org.springframework.context.annotation.Primary;
 @Configuration
 public class DataSourceConfig {
 
-    @Bean
-    @Primary
+//    @Bean
+//    @Primary
+    // Use when need IAM RDS Authentication
     public HikariDataSource dataSource(DataSourceProperties properties) {
         RDSIAMDataSource dataSource = new RDSIAMDataSource();
 

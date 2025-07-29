@@ -212,6 +212,8 @@ Resources:
                   - s3:ListBucket
                   - s3:GetBucketLocation
                 Resource: "*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
   LambdaCodeBucket:
     Type: AWS::S3::Bucket

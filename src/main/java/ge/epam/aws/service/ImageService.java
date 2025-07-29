@@ -9,4 +9,5 @@ public interface ImageService {
     ImageInfo getImageMetadata(String fileName);
     ImageInfo getRandomImageMetadata();
     ImageInfo getImage(String fileName);
+    String validateStoragesConsistency();
 }
