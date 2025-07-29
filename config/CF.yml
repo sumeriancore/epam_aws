@@ -1,0 +1,286 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create an RDS PostgreSQL instance with IAM authentication,
+  a Lambda function for post-creation setup, and a dedicated VPC.
+
+Parameters:
+  DBInstanceIdentifier:
+    Type: String
+    Default: my-iam-auth-db
+  DBName:
+    Type: String
+    Default: StepanOvsyannikovTestDb
+  DBMasterUsername:
+    Type: String
+    Default: postgres
+  DBMasterUserPassword:
+    Type: String
+    NoEcho: true
+  LambdaCodeS3BucketName:
+    Type: String
+    Default: stepan-ovsyannikov-bucket1
+    Description: Имя S3 бакета, где хранится Zip-файл с кодом Lambda.
+  LambdaCodeS3Key:
+    Type: String
+    Default: index.zip
+    Description: Ключ (путь к файлу) Zip-файла с кодом Lambda в S3 бакете.
+
+Resources:
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyRDSLambdaVPC
+
+  MyPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: "us-east-1b"
+      Tags:
+        - Key: Name
+          Value: MyPrivateSubnet1
+
+  MyDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS instance
+      SubnetIds:
+        - !Ref MyPublicSubnet
+        - !Ref MyPrivateSubnet1
+
+  MyRDSParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Parameter group for PostgreSQL with IAM authentication enabled
+      Family: postgres15
+      Parameters:
+        log_connections: "1"
+        log_disconnections: "1"
+
+  MyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: MyVPCInternetGateway
+
+  MyGatewayAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  MyPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: "us-east-1a"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: MyPublicSubnet
+
+  MyPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: MyPublicRouteTable
+
+  MyPublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref MyPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MyInternetGateway
+    DependsOn: MyGatewayAttach
+
+  MyPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MyPublicSubnet
+      RouteTableId: !Ref MyPublicRouteTable
+
+  MyDBSecurityGroupIngressFromAnywhere:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt MyDBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      CidrIp: 0.0.0.0/0
+    DependsOn: MyDBSecurityGroup
+
+  MyRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AvailabilityZone: "us-east-1a"
+      EnableIAMDatabaseAuthentication: true
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      Engine: postgres
+      EngineVersion: "15.7"
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: 20
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Ref DBMasterUserPassword
+      DBName: !Ref DBName
+      VPCSecurityGroups:
+        - !GetAtt MyDBSecurityGroup.GroupId
+      DBSubnetGroupName: !Ref MyDBSubnetGroup
+      DBParameterGroupName: !Ref MyRDSParameterGroup
+      PubliclyAccessible: true
+      Tags:
+        - Key: Name
+          Value: stepan-ovsyannikov-RDS-IAM-TEST
+
+  MyDBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS instance
+      VpcId: !Ref MyVPC
+
+  MyLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda to connect to RDS and respond to CloudFormation
+      VpcId: !Ref MyVPC
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          DestinationSecurityGroupId: !GetAtt MyDBSecurityGroup.GroupId
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  MyDBSecurityGroupIngressFromLambda:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt MyDBSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt MyLambdaSecurityGroup.GroupId
+    DependsOn:
+      - MyDBSecurityGroup
+      - MyLambdaSecurityGroup
+
+  MyLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RDSConnectPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: rds-db:connect
+                Resource: !Sub "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DBInstanceIdentifier}/${DBMasterUsername}"
+        - PolicyName: LambdaVPCAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+        - PolicyName: CloudFormationS3ResponsePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: "*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  LambdaCodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-lambda-code-${AWS::AccountId}"
+      Tags:
+        - Key: Name
+          Value: LambdaCodeBucket
+
+  MyRDSInitializerLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaCodeBucket
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt MyLambdaExecutionRole.Arn
+      Runtime: nodejs22.x
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          DB_MASTER_USERNAME: !Ref DBMasterUsername
+          DB_MASTER_PASSWORD: !Ref DBMasterUserPassword
+      VpcConfig:
+        SecurityGroupIds:
+          - !GetAtt MyLambdaSecurityGroup.GroupId
+        SubnetIds:
+          - !Ref MyPrivateSubnet1
+      Code:
+        S3Bucket: !Ref LambdaCodeS3BucketName
+        S3Key: !Ref LambdaCodeS3Key
+
+  MyS3VpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MyVPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds:
+        - !Ref MyPrivateRouteTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: "s3:*"
+            Resource: "*"
+      VpcEndpointType: Gateway
+
+  MyPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: MyPrivateRouteTable
+
+  MyPrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MyPrivateSubnet1
+      RouteTableId: !Ref MyPrivateRouteTable
+
+  RDSIAMUserCreator:
+    Type: Custom::RDSPostCreationScript
+    Properties:
+      ServiceToken: !GetAtt MyRDSInitializerLambda.Arn
+      DBEndpoint: !GetAtt MyRDSInstance.Endpoint.Address
+      DBName: !Ref DBName
+      DBUser: !Ref DBMasterUsername
+      DBPassword: !Ref DBMasterUserPassword
+    DependsOn: MyRDSInstance

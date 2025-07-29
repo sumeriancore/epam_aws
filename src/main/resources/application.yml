@@ -1,0 +1,39 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://my-iam-auth-db.c6zsa0ei03bh.us-east-1.rds.amazonaws.com:5432/StepanOvsyannikovTestDb?ssl=true&sslmode=require
+#    username: iam_database_user
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      max-lifetime: 840000
+    username: postgres
+    password: stepan20131998
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    loggers: slf4j
+    clean-disabled: false
+
+aws:
+  region: us-east-1
+  sns:
+    topic:
+      arn: arn:aws:sns:us-east-1:151182332702:Stepan-Ovsyannikov-UploadsNotificationTopic
+  sqs:
+    queue:
+      url: https://sqs.us-east-1.amazonaws.com/151182332702/Stepan-Ovsyannikov-UploadsNotificationQueue
+  s3:
+    bucket-name: stepan-ovsyannikov-bucket1
+    region: us-east-1
+    folder: rds/
+
+local:
+  filePath: downloads
+
+logging:
+  level:
+    org.flywaydb: DEBUG
+    org.springframework.jdbc: DEBUG
+#    software.amazon.awssdk: DEBUG
+    org.postgresql: DEBUG
